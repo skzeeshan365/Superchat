@@ -99,12 +99,14 @@ async def extract_metadata(url: str, platform: str, video_id: str):
                         }
                 except Exception:
                     continue
+        
+        raise Exception("Google API is missing/invalid and all Piped proxies are down. Please add GOOGLE_CLOUD_API to Railway Variables.")
 
+    # Instagram fallback
     def _extract():
         ydl_opts = {
             'quiet': True, 
-            'skip_download': True,
-            'extractor_args': {'youtube': {'player_client': ['android']}}
+            'skip_download': True
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             return ydl.extract_info(url, download=False)
@@ -131,13 +133,37 @@ async def download_audio(url: str, output_path: str, video_id: str = None):
                                 return
                 except Exception:
                     continue
+            
+            # Cobalt API Fallback for YouTube Audio
+            headers = {
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Origin": "https://cobalt.tools",
+                "User-Agent": "Mozilla/5.0"
+            }
+            payload = {"url": f"https://www.youtube.com/watch?v={video_id}", "isAudioOnly": True, "aFormat": "mp3"}
+            try:
+                res = await client.post("https://api.cobalt.tools/api/json", json=payload, headers=headers, timeout=15)
+                if res.status_code == 200:
+                    download_url = res.json().get("url")
+                    if download_url:
+                        async with client.stream('GET', download_url) as r:
+                            r.raise_for_status()
+                            with open(output_path, 'wb') as f:
+                                async for chunk in r.aiter_bytes(chunk_size=8192):
+                                    f.write(chunk)
+                        return
+            except Exception:
+                pass
+                
+        raise Exception("All Proxies (Piped/Cobalt) failed to download YouTube audio. Cannot use yt-dlp due to IP blocks.")
 
+    # Instagram Fallback
     def _download():
         ydl_opts = {
             'format': 'bestaudio/best',
             'outtmpl': output_path,
-            'quiet': True,
-            'extractor_args': {'youtube': {'player_client': ['android']}}
+            'quiet': True
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
