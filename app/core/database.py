@@ -4,7 +4,12 @@ from qdrant_client import AsyncQdrantClient
 from app.core.config import settings
 
 # SQLAlchemy setup
-engine = create_async_engine(settings.DATABASE_URL, echo=False)
+# Automatically inject asyncpg for Railway database URLs
+db_url = settings.DATABASE_URL
+if db_url.startswith("postgresql://"):
+    db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+engine = create_async_engine(db_url, echo=False)
 AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 Base = declarative_base()
 
