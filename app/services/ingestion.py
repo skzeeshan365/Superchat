@@ -253,7 +253,7 @@ async def get_transcript(url: str, platform: str, video_id: str) -> str:
 
     with tempfile.TemporaryDirectory() as temp_dir:
         audio_path = os.path.join(temp_dir, f"{video_id}.m4a")
-        await download_audio(url, audio_path, raw_video_id if platform == "youtube" else None)
+        await download_audio(url, audio_path, video_id if platform == "youtube" else None)
         transcript = await generate_transcript_with_assemblyai(audio_path)
         return transcript
 
