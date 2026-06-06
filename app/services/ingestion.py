@@ -78,7 +78,11 @@ async def extract_metadata(url: str, platform: str, video_id: str):
         # pytubefix fallback for metadata if Google API is missing or fails
         def _extract_pytube():
             from pytubefix import YouTube
-            yt = YouTube(url, use_po_token=True)
+            yt = None
+            try:
+                yt = YouTube(url, client='ANDROID')
+            except Exception:
+                yt = YouTube(url, client='WEB')
             return {
                 "id": video_id,
                 "title": yt.title,
@@ -111,7 +115,11 @@ async def download_audio(url: str, output_path: str, video_id: str = None):
     if video_id:
         def _download_yt():
             from pytubefix import YouTube
-            yt = YouTube(url, use_po_token=True)
+            yt = None
+            try:
+                yt = YouTube(url, client='ANDROID')
+            except Exception:
+                yt = YouTube(url, client='WEB')
             stream = yt.streams.get_audio_only()
             if stream:
                 stream.download(output_path=os.path.dirname(output_path), filename=os.path.basename(output_path))
