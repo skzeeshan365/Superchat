@@ -75,8 +75,37 @@ async def extract_metadata(url: str, platform: str, video_id: str):
                         "duration": total_seconds
                     }
 
+        # Piped API fallback for metadata if Google API is missing or fails
+        instances = ["https://pipedapi.kavin.rocks", "https://pipedapi.adminforge.de", "https://pipedapi.smnz.de"]
+        async with httpx.AsyncClient() as client:
+            for instance in instances:
+                try:
+                    res = await client.get(f"{instance}/streams/{video_id}", timeout=10)
+                    if res.status_code == 200:
+                        data = res.json()
+                        upload_date = data.get("uploadDate", "")
+                        if upload_date and "-" in upload_date:
+                            upload_date = upload_date.replace("-", "")
+                        return {
+                            "id": video_id,
+                            "title": data.get("title"),
+                            "uploader": data.get("uploader"),
+                            "view_count": data.get("views", 0),
+                            "like_count": data.get("likes", 0),
+                            "comment_count": 0,
+                            "upload_date": upload_date,
+                            "tags": [],
+                            "duration": data.get("duration", 0)
+                        }
+                except Exception:
+                    continue
+
     def _extract():
-        ydl_opts = {'quiet': True, 'skip_download': True}
+        ydl_opts = {
+            'quiet': True, 
+            'skip_download': True,
+            'extractor_args': {'youtube': {'player_client': ['android']}}
+        }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             return ydl.extract_info(url, download=False)
     return await asyncio.to_thread(_extract)
