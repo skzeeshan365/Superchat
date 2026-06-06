@@ -38,6 +38,8 @@ def extract_video_id_from_url(url: str, platform: str) -> str:
             return url.split("/p/")[1].split("/")[0].split("?")[0]
     return str(uuid.uuid4())
 
+import time
+last_yt_dlp_call = 0.0
 yt_dlp_lock = asyncio.Lock()
 
 async def extract_metadata(url: str, platform: str, video_id: str):
@@ -86,9 +88,15 @@ async def extract_metadata(url: str, platform: str, video_id: str):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             return ydl.extract_info(url, download=False)
             
+    global last_yt_dlp_call
     async with yt_dlp_lock:
-        await asyncio.sleep(5)  # 5-second delay to prevent YouTube rate-limit (bot detection)
-        return await asyncio.to_thread(_extract)
+        now = time.time()
+        elapsed = now - last_yt_dlp_call
+        if elapsed < 5.0:
+            await asyncio.sleep(5.0 - elapsed)
+        result = await asyncio.to_thread(_extract)
+        last_yt_dlp_call = time.time()
+        return result
 
 async def download_audio(url: str, output_path: str, video_id: str = None):
     def _download():
@@ -101,9 +109,14 @@ async def download_audio(url: str, output_path: str, video_id: str = None):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
             
+    global last_yt_dlp_call
     async with yt_dlp_lock:
-        await asyncio.sleep(5)  # 5-second delay to prevent YouTube rate-limit (bot detection)
+        now = time.time()
+        elapsed = now - last_yt_dlp_call
+        if elapsed < 5.0:
+            await asyncio.sleep(5.0 - elapsed)
         await asyncio.to_thread(_download)
+        last_yt_dlp_call = time.time()
 
 async def generate_transcript_with_assemblyai(audio_path: str) -> str:
     def _generate():
