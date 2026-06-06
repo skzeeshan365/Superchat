@@ -39,7 +39,7 @@ def extract_video_id_from_url(url: str, platform: str) -> str:
     return str(uuid.uuid4())
 
 import time
-last_yt_dlp_call = 0.0
+is_first_yt_dlp_call = True
 yt_dlp_lock = asyncio.Lock()
 
 async def extract_metadata(url: str, platform: str, video_id: str):
@@ -88,14 +88,13 @@ async def extract_metadata(url: str, platform: str, video_id: str):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             return ydl.extract_info(url, download=False)
             
-    global last_yt_dlp_call
+    global is_first_yt_dlp_call
     async with yt_dlp_lock:
-        now = time.time()
-        elapsed = now - last_yt_dlp_call
-        if elapsed < 5.0:
-            await asyncio.sleep(5.0 - elapsed)
+        if not is_first_yt_dlp_call:
+            await asyncio.sleep(5)
+        
         result = await asyncio.to_thread(_extract)
-        last_yt_dlp_call = time.time()
+        is_first_yt_dlp_call = False
         return result
 
 async def download_audio(url: str, output_path: str, video_id: str = None):
@@ -109,14 +108,13 @@ async def download_audio(url: str, output_path: str, video_id: str = None):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
             
-    global last_yt_dlp_call
+    global is_first_yt_dlp_call
     async with yt_dlp_lock:
-        now = time.time()
-        elapsed = now - last_yt_dlp_call
-        if elapsed < 5.0:
-            await asyncio.sleep(5.0 - elapsed)
+        if not is_first_yt_dlp_call:
+            await asyncio.sleep(5)
+            
         await asyncio.to_thread(_download)
-        last_yt_dlp_call = time.time()
+        is_first_yt_dlp_call = False
 
 async def generate_transcript_with_assemblyai(audio_path: str) -> str:
     def _generate():
