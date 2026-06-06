@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     COHERE_API_KEY: str
     ASSEMBLYAI_API_KEY: str
     POSTGRES_CHECKPOINT_URL: str
+    GOOGLE_CLOUD_API: Optional[str] = None
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

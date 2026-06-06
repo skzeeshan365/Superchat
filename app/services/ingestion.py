@@ -6,6 +6,8 @@ import datetime
 from pathlib import Path
 from youtube_transcript_api import YouTubeTranscriptApi
 import yt_dlp
+import httpx
+import re
 from sqlalchemy.ext.asyncio import AsyncSession
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import PointStruct
@@ -36,12 +38,47 @@ def extract_video_id_from_url(url: str, platform: str) -> str:
             return url.split("/p/")[1].split("/")[0].split("?")[0]
     return str(uuid.uuid4())
 
-async def extract_metadata(url: str):
+async def extract_metadata(url: str, platform: str, video_id: str):
+    if platform == "youtube" and settings.GOOGLE_CLOUD_API:
+        async with httpx.AsyncClient() as client:
+            api_url = f"https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics,contentDetails&id={video_id}&key={settings.GOOGLE_CLOUD_API}"
+            response = await client.get(api_url)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("items"):
+                    item = data["items"][0]
+                    snippet = item.get("snippet", {})
+                    stats = item.get("statistics", {})
+                    content_details = item.get("contentDetails", {})
+                    
+                    # Convert ISO 8601 duration
+                    duration_str = content_details.get("duration", "PT0S")
+                    hours, minutes, seconds = 0, 0, 0
+                    match = re.match(r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?', duration_str)
+                    if match:
+                        hours = int(match.group(1) or 0)
+                        minutes = int(match.group(2) or 0)
+                        seconds = int(match.group(3) or 0)
+                    total_seconds = hours * 3600 + minutes * 60 + seconds
+                    
+                    upload_date = snippet.get("publishedAt", "")[:10].replace("-", "")
+                    
+                    return {
+                        "id": video_id,
+                        "title": snippet.get("title"),
+                        "uploader": snippet.get("channelTitle"),
+                        "view_count": int(stats.get("viewCount", 0)),
+                        "like_count": int(stats.get("likeCount", 0)),
+                        "comment_count": int(stats.get("commentCount", 0)),
+                        "upload_date": upload_date,
+                        "tags": snippet.get("tags", []),
+                        "duration": total_seconds
+                    }
+
     def _extract():
         ydl_opts = {'quiet': True, 'skip_download': True}
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            return info
+            return ydl.extract_info(url, download=False)
     return await asyncio.to_thread(_extract)
 
 async def download_audio(url: str, output_path: str):
@@ -91,9 +128,9 @@ async def process_video(url: str, db: AsyncSession, qdrant: AsyncQdrantClient, j
         await db.commit()
 
         platform = "youtube" if "youtu" in url.lower() else "instagram"
-        info = await extract_metadata(url)
+        raw_video_id = extract_video_id_from_url(url, platform)
+        info = await extract_metadata(url, platform, raw_video_id)
         
-        raw_video_id = info.get('id', extract_video_id_from_url(url, platform))
         video_id = f"{platform}_{raw_video_id}"
 
         # Check if already processed
