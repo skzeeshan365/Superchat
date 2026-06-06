@@ -38,6 +38,8 @@ def extract_video_id_from_url(url: str, platform: str) -> str:
             return url.split("/p/")[1].split("/")[0].split("?")[0]
     return str(uuid.uuid4())
 
+yt_dlp_lock = asyncio.Lock()
+
 async def extract_metadata(url: str, platform: str, video_id: str):
     if platform == "youtube" and settings.GOOGLE_CLOUD_API:
         async with httpx.AsyncClient() as client:
@@ -75,71 +77,33 @@ async def extract_metadata(url: str, platform: str, video_id: str):
                         "duration": total_seconds
                     }
 
-        # pytubefix fallback for metadata if Google API is missing or fails
-        def _extract_pytube():
-            from pytubefix import YouTube
-            yt = None
-            try:
-                yt = YouTube(url, client='ANDROID')
-            except Exception:
-                yt = YouTube(url, client='WEB')
-            return {
-                "id": video_id,
-                "title": yt.title,
-                "uploader": yt.author,
-                "view_count": yt.views,
-                "like_count": 0,
-                "comment_count": 0,
-                "upload_date": yt.publish_date.strftime("%Y%m%d") if yt.publish_date else "",
-                "tags": [],
-                "duration": yt.length
-            }
-        try:
-            return await asyncio.to_thread(_extract_pytube)
-        except Exception:
-            pass
-        
-        raise Exception("Google API is missing/invalid and pytubefix failed to extract metadata.")
-
-    # Instagram fallback
     def _extract():
         ydl_opts = {
             'quiet': True, 
-            'skip_download': True
+            'skip_download': True,
+            'extractor_args': {'youtube': {'player_client': ['android']}}
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             return ydl.extract_info(url, download=False)
-    return await asyncio.to_thread(_extract)
+            
+    async with yt_dlp_lock:
+        await asyncio.sleep(5)  # 5-second delay to prevent YouTube rate-limit (bot detection)
+        return await asyncio.to_thread(_extract)
 
 async def download_audio(url: str, output_path: str, video_id: str = None):
-    if video_id:
-        def _download_yt():
-            from pytubefix import YouTube
-            yt = None
-            try:
-                yt = YouTube(url, client='ANDROID')
-            except Exception:
-                yt = YouTube(url, client='WEB')
-            stream = yt.streams.get_audio_only()
-            if stream:
-                stream.download(output_path=os.path.dirname(output_path), filename=os.path.basename(output_path))
-            else:
-                raise Exception("No audio stream found")
-        try:
-            return await asyncio.to_thread(_download_yt)
-        except Exception as e:
-            raise Exception(f"pytubefix failed to download YouTube audio: {e}")
-
-    # Instagram Fallback
     def _download():
         ydl_opts = {
             'format': 'bestaudio/best',
             'outtmpl': output_path,
-            'quiet': True
+            'quiet': True,
+            'extractor_args': {'youtube': {'player_client': ['android']}}
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
-    await asyncio.to_thread(_download)
+            
+    async with yt_dlp_lock:
+        await asyncio.sleep(5)  # 5-second delay to prevent YouTube rate-limit (bot detection)
+        await asyncio.to_thread(_download)
 
 async def generate_transcript_with_assemblyai(audio_path: str) -> str:
     def _generate():
