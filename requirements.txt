@@ -25,3 +25,4 @@ youtube-transcript-api
 python-multipart
 python-dotenv
 httpx
+pytubefix

@@ -75,32 +75,27 @@ async def extract_metadata(url: str, platform: str, video_id: str):
                         "duration": total_seconds
                     }
 
-        # Piped API fallback for metadata if Google API is missing or fails
-        instances = ["https://pipedapi.kavin.rocks", "https://pipedapi.adminforge.de", "https://pipedapi.smnz.de"]
-        async with httpx.AsyncClient() as client:
-            for instance in instances:
-                try:
-                    res = await client.get(f"{instance}/streams/{video_id}", timeout=10)
-                    if res.status_code == 200:
-                        data = res.json()
-                        upload_date = data.get("uploadDate", "")
-                        if upload_date and "-" in upload_date:
-                            upload_date = upload_date.replace("-", "")
-                        return {
-                            "id": video_id,
-                            "title": data.get("title"),
-                            "uploader": data.get("uploader"),
-                            "view_count": data.get("views", 0),
-                            "like_count": data.get("likes", 0),
-                            "comment_count": 0,
-                            "upload_date": upload_date,
-                            "tags": [],
-                            "duration": data.get("duration", 0)
-                        }
-                except Exception:
-                    continue
+        # pytubefix fallback for metadata if Google API is missing or fails
+        def _extract_pytube():
+            from pytubefix import YouTube
+            yt = YouTube(url, use_po_token=True)
+            return {
+                "id": video_id,
+                "title": yt.title,
+                "uploader": yt.author,
+                "view_count": yt.views,
+                "like_count": 0,
+                "comment_count": 0,
+                "upload_date": yt.publish_date.strftime("%Y%m%d") if yt.publish_date else "",
+                "tags": [],
+                "duration": yt.length
+            }
+        try:
+            return await asyncio.to_thread(_extract_pytube)
+        except Exception:
+            pass
         
-        raise Exception("Google API is missing/invalid and all Piped proxies are down. Please add GOOGLE_CLOUD_API to Railway Variables.")
+        raise Exception("Google API is missing/invalid and pytubefix failed to extract metadata.")
 
     # Instagram fallback
     def _extract():
@@ -114,49 +109,18 @@ async def extract_metadata(url: str, platform: str, video_id: str):
 
 async def download_audio(url: str, output_path: str, video_id: str = None):
     if video_id:
-        instances = ["https://pipedapi.kavin.rocks", "https://pipedapi.adminforge.de", "https://pipedapi.smnz.de"]
-        async with httpx.AsyncClient() as client:
-            for instance in instances:
-                try:
-                    res = await client.get(f"{instance}/streams/{video_id}", timeout=15)
-                    if res.status_code == 200:
-                        data = res.json()
-                        audio_streams = data.get("audioStreams", [])
-                        if audio_streams:
-                            stream_url = audio_streams[0].get("url")
-                            if stream_url:
-                                async with client.stream('GET', stream_url) as r:
-                                    r.raise_for_status()
-                                    with open(output_path, 'wb') as f:
-                                        async for chunk in r.aiter_bytes(chunk_size=8192):
-                                            f.write(chunk)
-                                return
-                except Exception:
-                    continue
-            
-            # Cobalt API Fallback for YouTube Audio
-            headers = {
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-                "Origin": "https://cobalt.tools",
-                "User-Agent": "Mozilla/5.0"
-            }
-            payload = {"url": f"https://www.youtube.com/watch?v={video_id}", "isAudioOnly": True, "aFormat": "mp3"}
-            try:
-                res = await client.post("https://api.cobalt.tools/api/json", json=payload, headers=headers, timeout=15)
-                if res.status_code == 200:
-                    download_url = res.json().get("url")
-                    if download_url:
-                        async with client.stream('GET', download_url) as r:
-                            r.raise_for_status()
-                            with open(output_path, 'wb') as f:
-                                async for chunk in r.aiter_bytes(chunk_size=8192):
-                                    f.write(chunk)
-                        return
-            except Exception:
-                pass
-                
-        raise Exception("All Proxies (Piped/Cobalt) failed to download YouTube audio. Cannot use yt-dlp due to IP blocks.")
+        def _download_yt():
+            from pytubefix import YouTube
+            yt = YouTube(url, use_po_token=True)
+            stream = yt.streams.get_audio_only()
+            if stream:
+                stream.download(output_path=os.path.dirname(output_path), filename=os.path.basename(output_path))
+            else:
+                raise Exception("No audio stream found")
+        try:
+            return await asyncio.to_thread(_download_yt)
+        except Exception as e:
+            raise Exception(f"pytubefix failed to download YouTube audio: {e}")
 
     # Instagram Fallback
     def _download():
