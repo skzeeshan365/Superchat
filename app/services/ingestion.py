@@ -115,47 +115,66 @@ async def extract_metadata(url: str, platform: str, video_id: str):
     return await _extract_invidious()
 
 async def download_audio(url: str, output_path: str, video_id: str = None):
-    if video_id:
-        async with httpx.AsyncClient() as client:
-            try:
-                res = await client.get("https://api.invidious.io/instances.json?sort_by=health", timeout=10)
-                instances = res.json()
-                valid_instances = [inst[1]["uri"] for inst in instances if inst[1].get("api") and inst[1].get("type") == "https"]
-            except Exception:
-                valid_instances = [
-                    "https://invidious.nerdvpn.de", "https://invidious.perennialte.ch", 
-                    "https://inv.tux.pizza", "https://invidious.lidarshield.cloud"
-                ]
-
-            for uri in valid_instances:
+    # Try public Cobalt instances first (works seamlessly on Railway without API keys)
+    if "youtu" in url.lower():
+        async with httpx.AsyncClient(verify=False) as client:
+            # List of highly available public Cobalt instances that don't block datacenters
+            cobalt_instances = [
+                "https://co.wuk.sh",
+                "https://cobalt.q0.ooguy.com",
+                "https://api.cobalt.best",
+                "https://cobalt.ducko.top",
+                "https://cobalt.api.zwei.one"
+            ]
+            for instance in cobalt_instances:
                 try:
-                    stream_url = f"{uri}/latest_version?id={video_id}&itag=140"
-                    
-                    async with client.stream('GET', stream_url, timeout=15, follow_redirects=True) as r:
-                        if r.status_code == 200:
-                            # Verify we are actually getting audio content
-                            content_type = r.headers.get("content-type", "")
-                            if "audio" in content_type or "video" in content_type or "octet-stream" in content_type:
-                                with open(output_path, 'wb') as f:
+                    headers = {
+                        "Accept": "application/json",
+                        "Content-Type": "application/json",
+                        "Origin": instance,
+                        "Referer": instance
+                    }
+                    payload = {
+                        "url": url,
+                        "isAudioOnly": True,
+                        "aFormat": "mp3"
+                    }
+                    # Cobalt v7 API format
+                    res = await client.post(f"{instance}/api/json", json=payload, headers=headers, timeout=15)
+                    if res.status_code in [200, 202]:
+                        data = res.json()
+                        stream_url = data.get("url")
+                        if stream_url:
+                            async with client.stream("GET", stream_url, follow_redirects=True, timeout=60) as r:
+                                r.raise_for_status()
+                                with open(output_path, "wb") as f:
                                     async for chunk in r.aiter_bytes(chunk_size=8192):
                                         f.write(chunk)
-                                return # Successfully downloaded via proxy!
+                            return # Successfully downloaded via Cobalt proxy!
                 except Exception:
-                    continue
-        raise Exception("All Invidious proxies failed to download the YouTube audio.")
+                    continue # Try the next instance if one is dead or blocked
 
-    # Instagram Fallback
+    # Fallback to standard yt-dlp (works locally with residential IP or if cookies.txt is provided)
     def _download():
         ydl_opts = {
             'format': 'bestaudio/best',
             'outtmpl': output_path,
-            'quiet': True
+            'quiet': True,
+            'extractor_args': {'youtube': {'player_client': ['android']}}
         }
+        if os.path.exists("cookies.txt"):
+            ydl_opts['cookiefile'] = "cookies.txt"
+            
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
-    await asyncio.to_thread(_download)
-
-async def generate_transcript_with_assemblyai(audio_path: str) -> str:
+            
+    global is_first_yt_dlp_call
+    async with yt_dlp_lock:
+        if not is_first_yt_dlp_call:
+            await asyncio.sleep(5)
+            
+        await asyncio.to_thread(_download)
+        is_first_yt_dlp_call = False
     def _generate():
         aai.settings.api_key = settings.ASSEMBLYAI_API_KEY
         transcriber = aai.Transcriber()

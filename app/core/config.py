@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     ASSEMBLYAI_API_KEY: str
     POSTGRES_CHECKPOINT_URL: str
     GOOGLE_CLOUD_API: Optional[str] = None
+    RAPIDAPI_KEY: Optional[str] = None
+    RAPIDAPI_HOST: Optional[str] = None
+    RAPIDAPI_URL: Optional[str] = None
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
