@@ -115,10 +115,46 @@ async def extract_metadata(url: str, platform: str, video_id: str):
     return await _extract_invidious()
 
 async def download_audio(url: str, output_path: str, video_id: str = None):
-    # Try public Cobalt instances first (works seamlessly on Railway without API keys)
+    # Try RapidAPI first (Industry standard for production scale)
+    if "youtu" in url.lower() and hasattr(settings, 'RAPIDAPI_KEY') and settings.RAPIDAPI_KEY and settings.RAPIDAPI_HOST:
+        async with httpx.AsyncClient() as client:
+            headers = {
+                "X-RapidAPI-Key": settings.RAPIDAPI_KEY,
+                "X-RapidAPI-Host": settings.RAPIDAPI_HOST
+            }
+            try:
+                # Use provided URL format or fallback to common ones
+                api_url = settings.RAPIDAPI_URL if hasattr(settings, 'RAPIDAPI_URL') and settings.RAPIDAPI_URL else f"https://{settings.RAPIDAPI_HOST}/dl?id="
+                if "{}" in api_url:
+                    full_url = api_url.format(video_id)
+                elif api_url.endswith("="):
+                    full_url = api_url + video_id
+                else:
+                    full_url = f"{api_url}?id={video_id}"
+
+                res = await client.get(full_url, headers=headers, timeout=30)
+                if res.status_code == 200:
+                    data = res.json()
+                    
+                    # Heuristic to find the download link in any common RapidAPI response format
+                    download_url = data.get("link") or data.get("url") or data.get("downloadUrl")
+                    if not download_url and isinstance(data.get("data"), dict):
+                        download_url = data["data"].get("link") or data["data"].get("url")
+                        
+                    if download_url:
+                        async with client.stream("GET", download_url, follow_redirects=True, timeout=60) as r:
+                            r.raise_for_status()
+                            with open(output_path, "wb") as f:
+                                async for chunk in r.aiter_bytes(chunk_size=8192):
+                                    f.write(chunk)
+                        return # Successfully downloaded via RapidAPI
+                raise Exception(f"RapidAPI failed: {res.text}")
+            except Exception as e:
+                pass # Fallback to next method if RapidAPI fails
+
+    # Fallback to public Cobalt instances (works seamlessly on Railway without API keys)
     if "youtu" in url.lower():
         async with httpx.AsyncClient(verify=False) as client:
-            # List of highly available public Cobalt instances that don't block datacenters
             cobalt_instances = [
                 "https://co.wuk.sh",
                 "https://cobalt.q0.ooguy.com",
@@ -139,7 +175,6 @@ async def download_audio(url: str, output_path: str, video_id: str = None):
                         "isAudioOnly": True,
                         "aFormat": "mp3"
                     }
-                    # Cobalt v7 API format
                     res = await client.post(f"{instance}/api/json", json=payload, headers=headers, timeout=15)
                     if res.status_code in [200, 202]:
                         data = res.json()
@@ -152,9 +187,9 @@ async def download_audio(url: str, output_path: str, video_id: str = None):
                                         f.write(chunk)
                             return # Successfully downloaded via Cobalt proxy!
                 except Exception:
-                    continue # Try the next instance if one is dead or blocked
+                    continue 
 
-    # Fallback to standard yt-dlp (works locally with residential IP or if cookies.txt is provided)
+    # Fallback to standard yt-dlp
     def _download():
         ydl_opts = {
             'format': 'bestaudio/best',
@@ -175,6 +210,8 @@ async def download_audio(url: str, output_path: str, video_id: str = None):
             
         await asyncio.to_thread(_download)
         is_first_yt_dlp_call = False
+
+async def generate_transcript_with_assemblyai(audio_path: str) -> str:
     def _generate():
         aai.settings.api_key = settings.ASSEMBLYAI_API_KEY
         transcriber = aai.Transcriber()
