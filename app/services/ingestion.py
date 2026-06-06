@@ -79,42 +79,85 @@ async def extract_metadata(url: str, platform: str, video_id: str):
                         "duration": total_seconds
                     }
 
-    def _extract():
-        ydl_opts = {
-            'quiet': True, 
-            'skip_download': True,
-            'extractor_args': {'youtube': {'player_client': ['android']}}
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            return ydl.extract_info(url, download=False)
+    # Robust Invidious Proxy Network fallback for metadata
+    async def _extract_invidious():
+        async with httpx.AsyncClient() as client:
+            try:
+                res = await client.get("https://api.invidious.io/instances.json?sort_by=health", timeout=10)
+                instances = res.json()
+                valid_instances = [inst[1]["uri"] for inst in instances if inst[1].get("api") and inst[1].get("type") == "https"]
+            except Exception:
+                valid_instances = [
+                    "https://invidious.nerdvpn.de", "https://invidious.perennialte.ch", 
+                    "https://inv.tux.pizza", "https://invidious.lidarshield.cloud"
+                ]
+
+            for uri in valid_instances:
+                try:
+                    vid_res = await client.get(f"{uri}/api/v1/videos/{video_id}", timeout=10)
+                    if vid_res.status_code == 200:
+                        data = vid_res.json()
+                        return {
+                            "id": video_id,
+                            "title": data.get("title"),
+                            "uploader": data.get("author"),
+                            "view_count": data.get("viewCount", 0),
+                            "like_count": data.get("likeCount", 0),
+                            "comment_count": 0,
+                            "upload_date": datetime.datetime.fromtimestamp(data.get("published", 0)).strftime("%Y%m%d") if data.get("published") else "",
+                            "tags": data.get("keywords", []),
+                            "duration": data.get("lengthSeconds", 0)
+                        }
+                except Exception:
+                    continue
+            raise Exception("Google Cloud API is missing, and all Invidious proxies failed to extract metadata.")
             
-    global is_first_yt_dlp_call
-    async with yt_dlp_lock:
-        if not is_first_yt_dlp_call:
-            await asyncio.sleep(5)
-        
-        result = await asyncio.to_thread(_extract)
-        is_first_yt_dlp_call = False
-        return result
+    return await _extract_invidious()
 
 async def download_audio(url: str, output_path: str, video_id: str = None):
+    if video_id:
+        async with httpx.AsyncClient() as client:
+            try:
+                res = await client.get("https://api.invidious.io/instances.json?sort_by=health", timeout=10)
+                instances = res.json()
+                valid_instances = [inst[1]["uri"] for inst in instances if inst[1].get("api") and inst[1].get("type") == "https"]
+            except Exception:
+                valid_instances = [
+                    "https://invidious.nerdvpn.de", "https://invidious.perennialte.ch", 
+                    "https://inv.tux.pizza", "https://invidious.lidarshield.cloud"
+                ]
+
+            for uri in valid_instances:
+                try:
+                    vid_res = await client.get(f"{uri}/api/v1/videos/{video_id}", timeout=10)
+                    if vid_res.status_code == 200:
+                        data = vid_res.json()
+                        formats = data.get("adaptiveFormats", [])
+                        audio_streams = [f for f in formats if f.get("type", "").startswith("audio")]
+                        if audio_streams:
+                            audio_streams.sort(key=lambda x: int(x.get("bitrate", 0)), reverse=True)
+                            stream_url = audio_streams[0].get("url")
+                            
+                            async with client.stream('GET', stream_url) as r:
+                                r.raise_for_status()
+                                with open(output_path, 'wb') as f:
+                                    async for chunk in r.aiter_bytes(chunk_size=8192):
+                                        f.write(chunk)
+                            return # Successfully downloaded via proxy!
+                except Exception:
+                    continue
+        raise Exception("All Invidious proxies failed to download the YouTube audio.")
+
+    # Instagram Fallback
     def _download():
         ydl_opts = {
             'format': 'bestaudio/best',
             'outtmpl': output_path,
-            'quiet': True,
-            'extractor_args': {'youtube': {'player_client': ['android']}}
+            'quiet': True
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
-            
-    global is_first_yt_dlp_call
-    async with yt_dlp_lock:
-        if not is_first_yt_dlp_call:
-            await asyncio.sleep(5)
-            
-        await asyncio.to_thread(_download)
-        is_first_yt_dlp_call = False
+    await asyncio.to_thread(_download)
 
 async def generate_transcript_with_assemblyai(audio_path: str) -> str:
     def _generate():
