@@ -129,21 +129,17 @@ async def download_audio(url: str, output_path: str, video_id: str = None):
 
             for uri in valid_instances:
                 try:
-                    vid_res = await client.get(f"{uri}/api/v1/videos/{video_id}", timeout=10)
-                    if vid_res.status_code == 200:
-                        data = vid_res.json()
-                        formats = data.get("adaptiveFormats", [])
-                        audio_streams = [f for f in formats if f.get("type", "").startswith("audio")]
-                        if audio_streams:
-                            audio_streams.sort(key=lambda x: int(x.get("bitrate", 0)), reverse=True)
-                            stream_url = audio_streams[0].get("url")
-                            
-                            async with client.stream('GET', stream_url) as r:
-                                r.raise_for_status()
+                    stream_url = f"{uri}/latest_version?id={video_id}&itag=140"
+                    
+                    async with client.stream('GET', stream_url, timeout=15, follow_redirects=True) as r:
+                        if r.status_code == 200:
+                            # Verify we are actually getting audio content
+                            content_type = r.headers.get("content-type", "")
+                            if "audio" in content_type or "video" in content_type or "octet-stream" in content_type:
                                 with open(output_path, 'wb') as f:
                                     async for chunk in r.aiter_bytes(chunk_size=8192):
                                         f.write(chunk)
-                            return # Successfully downloaded via proxy!
+                                return # Successfully downloaded via proxy!
                 except Exception:
                     continue
         raise Exception("All Invidious proxies failed to download the YouTube audio.")
