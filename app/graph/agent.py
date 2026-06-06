@@ -87,7 +87,7 @@ async def search_video_transcripts(query: str, video_ids: list[str]) -> str:
 tools = [get_video_stats, search_video_transcripts]
 
 llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash-lite", 
+    model="gemini-2.5-pro", 
     google_api_key=settings.GEMINI_API_KEY,
     temperature=0
 )
