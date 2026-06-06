@@ -12,15 +12,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import PointStruct
 import assemblyai as aai
+import cohere
 from google import genai
-from langchain_cohere import CohereEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from app.core.config import settings
 from app.models.domain import VideoMetadata, IngestionJob, JobStatus
 from app.core.database import QDRANT_COLLECTION_NAME
 
 gemini_client = genai.Client(api_key=settings.GEMINI_API_KEY)
-embeddings = CohereEmbeddings(model="embed-v4.0", cohere_api_key=settings.COHERE_API_KEY)
+co = cohere.AsyncClient(api_key=settings.COHERE_API_KEY)
 text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
 
 def extract_video_id_from_url(url: str, platform: str) -> str:
@@ -107,8 +107,10 @@ async def generate_transcript_with_assemblyai(audio_path: str) -> str:
 async def get_transcript(url: str, platform: str, video_id: str) -> str:
     if platform == "youtube":
         try:
-            transcript_list = await asyncio.to_thread(YouTubeTranscriptApi.get_transcript, video_id)
-            return " ".join([t['text'] for t in transcript_list])
+            def _get_transcript():
+                return YouTubeTranscriptApi().list(video_id).find_transcript(['en']).fetch()
+            transcript_list = await asyncio.to_thread(_get_transcript)
+            return " ".join([t.text for t in transcript_list])
         except Exception:
             pass 
 
@@ -168,7 +170,13 @@ async def process_video(url: str, db: AsyncSession, qdrant: AsyncQdrantClient, j
             # Chunk and embed
             chunks = text_splitter.split_text(transcript)
             if chunks:
-                embedded = await embeddings.aembed_documents(chunks)
+                txt_resp = await co.embed(
+                    model="embed-v4.0",
+                    texts=chunks,
+                    input_type="search_document",
+                    embedding_types=["float"]
+                )
+                embedded = txt_resp.embeddings.float
                 
                 points = []
                 for i, (chunk, vector) in enumerate(zip(chunks, embedded)):

@@ -11,10 +11,10 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal, QDRANT_COLLECTION_NAME
 from app.models.domain import VideoMetadata
-from langchain_cohere import CohereEmbeddings
+import cohere
 import asyncio
 
-embeddings = CohereEmbeddings(model="embed-v4.0", cohere_api_key=settings.COHERE_API_KEY)
+co = cohere.AsyncClient(api_key=settings.COHERE_API_KEY)
 
 # Use synchronous Qdrant client for LangChain tools (or async tools, let's use async)
 from qdrant_client import AsyncQdrantClient
@@ -50,7 +50,13 @@ async def get_video_stats(video_ids: list[str]) -> str:
 async def search_video_transcripts(query: str, video_ids: list[str]) -> str:
     """Useful to search through the spoken words/transcripts of the videos to compare hooks, topics, or what worked."""
     # Embed the query
-    vector = await embeddings.aembed_query(query)
+    txt_resp = await co.embed(
+        model="embed-v4.0",
+        texts=[query],
+        input_type="search_query",
+        embedding_types=["float"]
+    )
+    vector = txt_resp.embeddings.float[0]
     
     # Filter by video_ids
     should_conditions = [
