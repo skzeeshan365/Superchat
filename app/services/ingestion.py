@@ -81,7 +81,28 @@ async def extract_metadata(url: str, platform: str, video_id: str):
             return ydl.extract_info(url, download=False)
     return await asyncio.to_thread(_extract)
 
-async def download_audio(url: str, output_path: str):
+async def download_audio(url: str, output_path: str, video_id: str = None):
+    if video_id:
+        instances = ["https://pipedapi.kavin.rocks", "https://pipedapi.adminforge.de", "https://pipedapi.smnz.de"]
+        async with httpx.AsyncClient() as client:
+            for instance in instances:
+                try:
+                    res = await client.get(f"{instance}/streams/{video_id}", timeout=15)
+                    if res.status_code == 200:
+                        data = res.json()
+                        audio_streams = data.get("audioStreams", [])
+                        if audio_streams:
+                            stream_url = audio_streams[0].get("url")
+                            if stream_url:
+                                async with client.stream('GET', stream_url) as r:
+                                    r.raise_for_status()
+                                    with open(output_path, 'wb') as f:
+                                        async for chunk in r.aiter_bytes(chunk_size=8192):
+                                            f.write(chunk)
+                                return
+                except Exception:
+                    continue
+
     def _download():
         ydl_opts = {
             'format': 'bestaudio/best',
@@ -142,7 +163,7 @@ async def get_transcript(url: str, platform: str, video_id: str) -> str:
 
     with tempfile.TemporaryDirectory() as temp_dir:
         audio_path = os.path.join(temp_dir, f"{video_id}.m4a")
-        await download_audio(url, audio_path)
+        await download_audio(url, audio_path, video_id if platform == "youtube" else None)
         transcript = await generate_transcript_with_assemblyai(audio_path)
         return transcript
 
